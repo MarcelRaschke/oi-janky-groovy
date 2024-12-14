@@ -8,6 +8,9 @@ properties([
 	]),
 ])
 
+targetSuites = targetSuites.trim()
+currentBuild.displayName = targetSuites + ' (#' + currentBuild.number + ')'
+
 def vars = fileLoader.fromGit(
 	'tianon/debuerreotype/vars.groovy', // script
 	'https://github.com/docker-library/oi-janky-groovy.git', // repo
@@ -27,10 +30,10 @@ node() {
 		deleteDir()
 		stage('Download debuerreotype') {
 			sh '''
-				wget -O 'debuerreotype.tgz' "https://github.com/debuerreotype/debuerreotype/archive/${debuerreotypeVersion}.tar.gz"
+				wget --timeout=5 -O 'debuerreotype.tgz' "https://github.com/debuerreotype/debuerreotype/archive/${debuerreotypeVersion}.tar.gz"
 				tar -xf debuerreotype.tgz --strip-components=1
 				if [ "$debuerreotypeExamplesCommit" != "$debuerreotypeVersion" ]; then
-					wget -O 'debuerreotype-examples.tgz' "https://github.com/debuerreotype/debuerreotype/archive/${debuerreotypeExamplesCommit}.tar.gz"
+					wget --timeout=5 -O 'debuerreotype-examples.tgz' "https://github.com/debuerreotype/debuerreotype/archive/${debuerreotypeExamplesCommit}.tar.gz"
 					rm -rf examples
 					tar -xf debuerreotype-examples.tgz --strip-components=1 \
 						"debuerreotype-${debuerreotypeExamplesCommit}/.docker-image.sh" \
@@ -67,11 +70,11 @@ node() {
 			])
 			sh '''
 				git config user.name 'Docker Library Bot'
-				git config user.email 'github+dockerlibrarybot@infosiftr.com'
+				git config user.email 'doi+docker-library-bot@docker.com'
 			'''
 		}
 
-		targetSuites = targetSuites.trim().tokenize()
+		targetSuites = targetSuites.tokenize()
 		for (targetSuite in targetSuites) {
 			withEnv(['targetSuite=' + targetSuite]) {
 				stage('Generate ' + targetSuite) {
@@ -91,7 +94,7 @@ node() {
 					'''
 				}
 
-				sshagent(['docker-library-bot']) {
+				sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 					stage('Push ' + targetSuite) {
 						sh 'git push -f origin "HEAD:refs/heads/dist-$targetSuite"'
 					}

@@ -14,12 +14,12 @@ def repoMeta = vars.repoMeta(repo)
 node {
 	env.BASHBREW_CACHE = env.WORKSPACE + '/bashbrew-cache'
 	env.BASHBREW_LIBRARY = env.WORKSPACE + '/oi/library'
+	dir(env.BASHBREW_CACHE) { deleteDir() }
 
 	env.BRANCH_BASE = repoMeta['branch-base']
 	env.BRANCH_PUSH = repoMeta['branch-push']
 
 	stage('Checkout') {
-		sh 'mkdir -p "$BASHBREW_CACHE"'
 		checkout(
 			poll: false,
 			changelog: false,
@@ -42,9 +42,6 @@ node {
 				submoduleCfg: [],
 			],
 		)
-
-		// https://github.com/docker-library/bashbrew/pull/43
-		env.BASHBREW_BUILDKIT_SYNTAX = sh(script: 'cat oi/.bashbrew-buildkit-syntax', returnStdout: true).trim()
 
 		checkout([
 			$class: 'GitSCM',
@@ -70,9 +67,9 @@ node {
 			set -Eeuo pipefail -x
 
 			git -C oi config user.name 'Docker Library Bot'
-			git -C oi config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git -C oi config user.email 'doi+docker-library-bot@docker.com'
 			git -C repo config user.name 'Docker Library Bot'
-			git -C repo config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git -C repo config user.email 'doi+docker-library-bot@docker.com'
 
 			# https://github.com/moby/moby/issues/30973 🤦
 			# docker build --pull --tag oisupport/update.sh 'https://github.com/docker-library/oi-janky-groovy.git#:update.sh'
@@ -86,11 +83,11 @@ node {
 			user="$(id -u):$(id -g)"
 			docker run --init --rm --user "$user" --mount "type=bind,src=$PWD,dst=$PWD,ro" --workdir "$PWD" oisupport/update.sh \\
 				./generate-stackbrew-library.sh \\
-				| bashbrew from --apply-constraints /dev/stdin > /dev/null
+				| bashbrew fetch --arch-filter /dev/stdin
 		'''
 
 		if (repoMeta['branch-base'] != repoMeta['branch-push']) {
-			sshagent(['docker-library-bot']) {
+			sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 				sh '''
 					git -C repo pull --rebase origin "$BRANCH_BASE"
 				'''
@@ -101,7 +98,20 @@ node {
 	def testRun = workspace + '/oi/test/run.sh'
 	def testBuildNamespace = 'update.sh'
 
-	ansiColor('xterm') { dir('repo') {
+	// https://github.com/docker-library/official-images/pull/14212
+	def buildEnvsJson = sh(returnStdout: true, script: '''#!/usr/bin/env bash
+		set -Eeuo pipefail -x
+
+		oi/.bin/bashbrew-buildkit-env-setup.sh \\
+			| tee /dev/stderr \\
+			| jq 'to_entries | map(.key + "=" + .value)'
+	''').trim()
+	def buildEnvs = []
+	if (buildEnvsJson) {
+		buildEnvs += readJSON(text: buildEnvsJson)
+	}
+
+	ansiColor('xterm') { withEnv(buildEnvs) { dir('repo') {
 		env.UPDATE_SCRIPT = repoMeta['update-script']
 		stage('update.sh') {
 			retry(3) {
@@ -230,7 +240,8 @@ node {
 						./generate-stackbrew-library.sh \\
 						> "$BASHBREW_LIBRARY/$repo"
 
-					git -C "$BASHBREW_CACHE/git" fetch "$PWD" HEAD:
+					gitCache="$(bashbrew cat --format '{{ gitCache }}' "$repo")"
+					git -C "$gitCache" fetch "$PWD" HEAD:
 				)
 			'''
 		}
@@ -284,76 +295,81 @@ node {
 			}
 
 			stage('Push') {
-				sshagent(['docker-library-bot']) {
+				sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 					sh 'git push $([ "$BRANCH_BASE" = "$BRANCH_PUSH" ] || echo --force) origin "HEAD:$BRANCH_PUSH"'
 				}
 			}
 		} else {
 			echo("No changes in ${repo}!  Skipping.")
 		}
-	} }
+	} } }
 
-	stage('Stage PR') {
-		sshagent(['docker-library-bot']) {
-			sh '''#!/usr/bin/env bash
-				set -Eeuo pipefail
-				set -x
-			''' + """
-				repo='${repo}'
-				url='${repoMeta['url'].replaceFirst(':', '/').replaceFirst('git@', 'https://').replaceFirst('[.]git$', '')}'
-				oiFork='${repoMeta['oi-fork']}'
-				oiForkUrl='${repoMeta['oi-fork'].replaceFirst(':', '/').replaceFirst('git@', 'https://').replaceFirst('[.]git$', '')}'
-			""" + '''
-				git -C oi reset HEAD
-				git -C oi clean -dfx
-				git -C oi checkout -- .
+	if (repoMeta['bot-branch']) {
+		stage('Stage PR') {
+			sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
+				sh '''#!/usr/bin/env bash
+					set -Eeuo pipefail
+					set -x
+				''' + """
+					repo='${repo}'
+					url='${repoMeta['url'].replaceFirst(':', '/').replaceFirst('git@', 'https://').replaceFirst('[.]git$', '')}'
+					oiFork='${repoMeta['oi-fork']}'
+					oiForkUrl='${repoMeta['oi-fork'].replaceFirst(':', '/').replaceFirst('git@', 'https://').replaceFirst('[.]git$', '')}'
+				""" + '''
+					git -C oi reset HEAD
+					git -C oi clean -dfx
+					git -C oi checkout -- .
 
-				prevDate="$(git -C oi log -1 --format='format:%at' "$BASHBREW_LIBRARY/$repo")"
-				(( prevDate++ )) || :
-				prevDate="$(date --date "@$prevDate" --rfc-2822)"
-				changesFormat='- %h: %s'
-				prSed=''
-				case "$url" in
-					*github.com*)
-						changesFormat="- $url/commit/%h: %s"
-						# look for "#NNN" so we can explicitly link to any PRs too
-						prSed="s!#([0-9]+)!$url/pull/\\\\1!g"
-						;;
-				esac
-				changes="$(git -C repo log --after="$prevDate" --format="$changesFormat" || :)"
-				if [ -n "$prSed" ]; then
-					changes="$(sed -r "$prSed" <<<"$changes")"
-				fi
-
-				commitArgs=( -m "Update $repo" )
-				if [ -n "$changes" ]; then
-					# might be something like just "Architectures:" changes for which there's no commits
-					commitArgs+=( -m 'Changes:' -m "$changes" )
-				fi
-
-				(
-					cd repo
-					user="$(id -u):$(id -g)"
-					docker run --init --rm --user "$user" --mount "type=bind,src=$PWD,dst=$PWD,ro" --workdir "$PWD" oisupport/update.sh \\
-						./generate-stackbrew-library.sh \\
-						> "$BASHBREW_LIBRARY/$repo"
-				)
-
-				oi/naughty-from.sh "$repo"
-				oi/naughty-constraints.sh "$repo"
-
-				date="$(git -C repo log -1 --format='format:%aD')"
-				export GIT_AUTHOR_DATE="$date" GIT_COMMITTER_DATE="$date"
-				if [ "$BRANCH_BASE" = "$BRANCH_PUSH" ] && git -C oi add "$BASHBREW_LIBRARY/$repo" && git -C oi commit "${commitArgs[@]}"; then
-					if diff "$BASHBREW_LIBRARY/$repo" <(wget -qO- "$oiForkUrl/raw/$repo/library/$repo") &> /dev/null; then
-						# if this exact file content is already pushed to a bot branch, don't force push it again
-						exit
+					prevDate="$(git -C oi log -1 --format='format:%at' "$BASHBREW_LIBRARY/$repo")"
+					(( prevDate++ )) || :
+					prevDate="$(date --date "@$prevDate" --rfc-2822)"
+					changesFormat='- %h: %s'
+					prSed=''
+					case "$url" in
+						*github.com*)
+							changesFormat="- $url/commit/%h: %s"
+							# look for "#NNN" so we can explicitly link to any PRs too
+							prSed="s!#([0-9]+)!$url/pull/\\\\1!g"
+							;;
+					esac
+					changes="$(git -C repo log --after="$prevDate" --format="$changesFormat" || :)"
+					if [ -n "$prSed" ]; then
+						changes="$(sed -r "$prSed" <<<"$changes")"
 					fi
-					git -C oi push -f "$oiFork" "HEAD:refs/heads/$repo"
-				else
-					git -C oi push "$oiFork" --delete "refs/heads/$repo"
-				fi
-			'''
+
+					commitArgs=( -m "Update $repo" )
+					if [ -n "$changes" ]; then
+						# might be something like just "Architectures:" changes for which there's no commits
+						commitArgs+=( -m 'Changes:' -m "$changes" )
+					fi
+
+					(
+						cd repo
+						user="$(id -u):$(id -g)"
+						docker run --init --rm --user "$user" --mount "type=bind,src=$PWD,dst=$PWD,ro" --workdir "$PWD" oisupport/update.sh \\
+							./generate-stackbrew-library.sh \\
+							> "$BASHBREW_LIBRARY/$repo"
+					)
+
+					naughty="$(
+						oi/naughty-from.sh "$repo"
+						oi/naughty-constraints.sh "$repo"
+					)"
+					[ -z "$naughty" ]
+
+					date="$(git -C repo log -1 --format='format:%aD')"
+					export GIT_AUTHOR_DATE="$date" GIT_COMMITTER_DATE="$date"
+					if [ "$BRANCH_BASE" = "$BRANCH_PUSH" ] && git -C oi add "$BASHBREW_LIBRARY/$repo" && git -C oi commit "${commitArgs[@]}"; then
+						if diff "$BASHBREW_LIBRARY/$repo" <(wget --timeout=5 -qO- "$oiForkUrl/raw/$repo/library/$repo") &> /dev/null; then
+							# if this exact file content is already pushed to a bot branch, don't force push it again
+							exit
+						fi
+						git -C oi push -f "$oiFork" "HEAD:refs/heads/$repo"
+					else
+						git -C oi push "$oiFork" --delete "refs/heads/$repo"
+					fi
+				'''
+			}
 		}
 	}
 }

@@ -49,10 +49,32 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 		)
 	}
 
+	// https://github.com/docker-library/official-images/pull/14212
 	// https://github.com/docker-library/bashbrew/pull/43
-	env.BASHBREW_BUILDKIT_SYNTAX = sh(script: 'cat oi/.bashbrew-buildkit-syntax', returnStdout: true).trim()
+	def buildEnvs = []
+	stage('Prepare') {
+		def json = sh(returnStdout: true, script: '''#!/usr/bin/env bash
+			set -Eeuo pipefail -x
 
-	ansiColor('xterm') {
+			builders="$(bashbrew cat --format '{{ range .Entries }}{{ .ArchBuilder arch }}{{ "\\n" }}{{ end }}' "$ACT_ON_IMAGE")"
+			if grep <<<"$builders" -qE '^buildkit$'; then
+				json="$(oi/.bin/bashbrew-buildkit-env-setup.sh)"
+				jq <<<"$json" '
+					to_entries
+					| map(
+						select(.key == "BASHBREW_BUILDKIT_SYNTAX") # skip provenance, SBOM, etc because this build system cannot handle it without containerd in Docker
+						| .key + "=" + .value
+					)
+				' | tee /dev/stderr
+			fi
+		''')
+		if (json) {
+			buildEnvs += readJSON(text: json)
+		}
+		echo("build envs:\n" + buildEnvs.join("\n")) // hack hack hack (org.jenkinsci.plugins.scriptsecurity.sandbox.RejectedAccessException: Scripts not permitted to use method net.sf.json.JSONArray join java.lang.String)
+	}
+
+	ansiColor('xterm') { withEnv(buildEnvs) {
 		withEnv([
 			'BASHBREW_FROMS_TEMPLATE=' + '''
 				{{- range $.Entries -}}
@@ -63,6 +85,10 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 				{{- end -}}
 			''',
 		]) {
+			stage('Fetch') {
+				sh 'bashbrew fetch --apply-constraints "$ACT_ON_IMAGE"'
+			}
+
 			stage('Pull') {
 				sh '''#!/usr/bin/env bash
 					set -Eeuo pipefail
@@ -79,11 +105,13 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 					# filter the above list via build-info/image-ids/xxx from the build jobs to see if our image on-disk is already fresh (since even a no-op "docker pull" takes a long time to come back with a result)
 					parentsToPull=()
 					for parent in $parents; do
-						if [[ "$parent" == */* ]]; then
-							# non-official / non-"local" image (Windows)?  pull it
-							parentsToPull+=( "$parent" )
-							continue
-						fi
+						case "$parent" in
+							*/* | *@*)
+								# non-official / non-"local" image (Windows)?  pull it
+								parentsToPull+=( "$parent" )
+								continue
+								;;
+						esac
 
 						parentImageIdLocal="$(docker image inspect --format '{{ .Id }}' "$parent" 2>/dev/null || :)"
 						if [ -z "$parentImageIdLocal" ]; then
@@ -93,7 +121,7 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 						fi
 
 						parentRepo="${parent%%:*}"
-						parentImageId="$(wget -qO- "https://doi-janky.infosiftr.net/job/multiarch/job/$ACT_ON_ARCH/job/$parentRepo/lastSuccessfulBuild/artifact/build-info/image-ids/${parent//:/_}.txt" 2>/dev/null || :)"
+						parentImageId="$(wget --timeout=5 -qO- "https://doi-janky.infosiftr.net/job/multiarch/job/$ACT_ON_ARCH/job/$parentRepo/lastSuccessfulBuild/artifact/build-info/image-ids/${parent//:/_}.txt" 2>/dev/null || :)"
 						if [ -z "$parentImageId" ]; then
 							# we can't tell if it's fresh; pull it
 							parentsToPull+=( "$parent" )
@@ -110,17 +138,22 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 					done
 
 					if [ "${#parentsToPull[@]}" -gt 0 ]; then
-						# pull the ones appropriate for our target architecture
-						echo "${parentsToPull[@]}" \\
-							| gawk -v RS='[[:space:]]+' -v ns="$TARGET_NAMESPACE" '{ if (/\\//) { print $0 } else { print ns "/" $0 } }' \\
-							| xargs -rtn1 docker pull \\
-							|| true
+						buildkitContexts="$(BASHBREW_ARCH_NAMESPACES="$BASHBREW_ARCH = $TARGET_NAMESPACE" oi/.buildkit-build-contexts.sh "${parentsToPull[@]}")"
 
-						# ... and then tag them without the namespace (so "bashbrew build" can "just work" as-is)
-						echo "${parentsToPull[@]}" \\
-							| gawk -v RS='[[:space:]]+' -v ns="$TARGET_NAMESPACE" '!/\\// { print ns "/" $0; print }' \\
-							| xargs -rtn2 docker tag \\
-							|| true
+						pullShell="$(jq <<<"$buildkitContexts" -rR '
+							split("=docker-image://")
+							| [
+								if .[0] | contains("@sha256") then
+									# we cannot "docker tag ... foo@sha256:xxx" 😅 (but BuildKit can handle them just fine in "--build-context" and the eventual https://github.com/moby/buildkit/pull/3332 👀)
+									"docker pull \\(.[0] | @sh)"
+								else
+									"docker pull \\(.[1] | @sh)",
+									"docker tag \\(.[1] | @sh) \\(.[0] | @sh)"
+								end
+							]
+							| join(" && ") + " || :" # fail loudly, but not fatally
+						')"
+						eval "$pullShell"
 					fi
 				'''
 
@@ -205,5 +238,5 @@ node(vars.node(env.ACT_ON_ARCH, env.ACT_ON_IMAGE)) {
 				}
 			}
 		}
-	}
+	} }
 }

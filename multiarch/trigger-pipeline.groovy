@@ -1,9 +1,18 @@
 // properties are set via "generate-pipeline.groovy" (jobDsl)
 
+// we can't use "load()" here because we don't have a file context (or a real checkout of "oi-janky-groovy" -- the pipeline plugin hides that checkout from the actual pipeline execution)
+def vars = fileLoader.fromGit(
+	'multiarch/vars.groovy', // script
+	'https://github.com/docker-library/oi-janky-groovy.git', // repo
+	'master', // branch
+	null, // credentialsId
+	'', // node/label
+)
+
 // setup environment variables, etc.
 env.ACT_ON_ARCH = env.JOB_NAME.split('/')[-2] // "i386", etc
 
-node {
+node(vars.node(env.ACT_ON_ARCH, 'trigger')) {
 	env.BASHBREW_LIBRARY = env.WORKSPACE + '/oi/library'
 	env.BASHBREW_ARCH = env.ACT_ON_ARCH
 
@@ -45,7 +54,9 @@ node {
 		if (0 != sh(returnStatus: true, script: '''#!/usr/bin/env bash
 			set -Eeuo pipefail
 			set -x
-			commit="$(wget -qO- "https://doi-janky.infosiftr.net/job/multiarch/job/$ACT_ON_ARCH/job/$REPO/lastSuccessfulBuild/artifact/build-info/commit.txt")"
+
+			# ipv6 can be extremely slow on s390x so set a timeout and have wget try the other DNS addresses instead
+			commit="$(wget --timeout=5 -qO- "https://doi-janky.infosiftr.net/job/multiarch/job/$ACT_ON_ARCH/job/$REPO/lastSuccessfulBuild/artifact/build-info/commit.txt")"
 			[ -n "$commit" ]
 			touchingCommits="$(git -C "$BASHBREW_LIBRARY" log --oneline "$commit...HEAD" -- "$REPO")"
 			[ -z "$touchingCommits" ]

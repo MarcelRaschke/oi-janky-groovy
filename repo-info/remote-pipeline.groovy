@@ -76,7 +76,7 @@ node {
 		stage('Commit') {
 			sh('''
 				git config user.name 'Docker Library Bot'
-				git config user.email 'github+dockerlibrarybot@infosiftr.com'
+				git config user.email 'doi+docker-library-bot@docker.com'
 
 				for repoDir in repos/*; do
 					repo="$(basename "$repoDir")"
@@ -86,7 +86,7 @@ node {
 			''')
 		}
 
-		sshagent(['docker-library-bot']) {
+		sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 			stage('Push') {
 				sh('''
 					# try catching up since this job takes so long to run

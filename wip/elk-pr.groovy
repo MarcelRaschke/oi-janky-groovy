@@ -24,7 +24,7 @@ node {
 		)
 		sh '''
 			git -C oi config user.name 'Docker Library Bot'
-			git -C oi config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git -C oi config user.email 'doi+docker-library-bot@docker.com'
 		'''
 	}
 
@@ -94,7 +94,7 @@ node {
 
 	withEnv([ 'timestamp=' + latestTimestamp, 'changes=' + changes.join('\n\n') ]) {
 		stage('Stage PR') {
-			sshagent(['docker-library-bot']) {
+			sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 				sh '''#!/usr/bin/env bash
 					set -Eeuo pipefail -x
 

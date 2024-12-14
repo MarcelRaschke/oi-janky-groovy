@@ -101,13 +101,30 @@ def bashbrewBuildAndPush(context) {
 		} else {
 			try {
 				withEnv(['tagFroms=' + tagFroms]) {
-					sh '''
-						# pre-build sanity check
+					sh '''#!/usr/bin/env bash
+						# pre-build sanity check (build context is definitely fetched, making sure all our FROMs exist locally)
+						bashbrew fetch --arch-filter "$tag" # this already happened earlier, but doing it again as a sanity check
 						for tagFrom in $tagFroms; do
-							[ "$tagFrom" = 'scratch' ] || docker inspect --type image "$tagFrom" > /dev/null
+							if [ "$tagFrom" = 'scratch' ]; then
+								continue
+							fi
+							docker image inspect --format '.' "$tagFrom" > /dev/null
 						done
 					'''
 				}
+
+				// https://reproducible-builds.org/docs/source-date-epoch/
+				// https://github.com/moby/buildkit/blob/2f27653c74dd57d26ff6474cd0635aced8e79765/docs/build-repro.md#source_date_epoch
+				env.SOURCE_DATE_EPOCH = sh(returnStdout: true, script: '''#!/usr/bin/env bash
+					set -Eeuo pipefail -x
+
+					gitCache="$(bashbrew cat --format '{{ gitCache }}' "$tag")"
+					commit="$(bashbrew cat --format '{{- .TagEntry.ArchGitCommit arch -}}' "$tag")"
+					epoch="$(git -C "$gitCache" show --no-patch --format='format:%ct' "$commit")"
+					[ -n "$epoch" ]
+					echo "$epoch"
+				''').trim()
+
 				timeout(time: 3, unit: 'HOURS') {
 					retry(3) { // retry building each tag up to three times (but still within the same shared timeout)
 						sh 'bashbrew build "$tag"'

@@ -51,6 +51,15 @@ node {
 		def arches = []
 		def archNamespaces = [:]
 		def archImages = [:]
+
+		// https://github.com/docker-library/meta/blob/main/subset.txt
+		def subset = []
+		new URL('https://raw.githubusercontent.com/docker-library/meta/main/subset.txt').eachLine { line ->
+			subset << line
+		}
+		if (subset.size == 0) {
+			throw new Error('refusing to continue; no subset items found')
+		}
 	'''
 
 	for (arch in vars.arches) {
@@ -69,6 +78,7 @@ node {
 				archNamespaces[arch] = '${ns}'
 				archImages[arch] = [
 					'_trigger',
+					'_trigger-external-pins',
 			"""
 			for (img in archImages) {
 				dsl += """
@@ -96,6 +106,9 @@ node {
 					if (img == '_trigger') {
 						desc = 'Trigger all the things! (Jenkins SCM triggering does not work well for our use case)'
 						groovyScript = 'multiarch/trigger-pipeline.groovy'
+					} else if (img == '_trigger-external-pins') {
+						desc = 'Trigger all the pinned things! (Jenkins SCM triggering does not work well for our use case); https://github.com/docker-library/official-images/tree/master/.external-pins'
+						groovyScript = 'multiarch/external-pins-trigger-pipeline.groovy'
 					} else {
 						desc = """
 							Useful links:
@@ -105,22 +118,22 @@ node {
 								<li><a href="https://github.com/docker-library/official-images/blob/master/library/${img}"><code>official-images/library/${img}</code></a></li>
 							</ul>
 						"""
-						groovyScript = 'multiarch/target-pipeline.groovy'
+						if (subset.contains(img)) {
+							groovyScript = 'multiarch/empty-pipeline.groovy'
+						} else {
+							groovyScript = 'multiarch/target-pipeline.groovy'
+						}
 					}
 
 					pipelineJob("${arch}/${img}") {
 						description(desc)
-						logRotator { daysToKeep(4) }
+						logRotator { numToKeep(24) }
 						// TODO concurrentBuild(false)
 						// see https://issues.jenkins-ci.org/browse/JENKINS-31832?focusedCommentId=343307&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-343307
 						configure { it / 'properties' << 'org.jenkinsci.plugins.workflow.job.properties.DisableConcurrentBuildsJobProperty' { } }
 						triggers {
-							if (img == '_trigger') {
+							if (img == '_trigger' || img == '_trigger-external-pins') {
 								cron('@hourly')
-							}
-							else if (arch =~ /^windows-/) {
-								// Windows images often update on Tuesdays (so-called "Patch Tuesday"), so let's try rebuilding Windows-based images every Wednesday morning (whether they need it or not!)
-								cron('H H(5-6) * * 3')
 							}
 						}
 						definition {

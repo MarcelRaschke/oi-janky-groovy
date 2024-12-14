@@ -9,6 +9,8 @@ def defaultRepoMeta = [
 	['branch-base', 'master'], // branch to check out from
 	['branch-push', 'master'], // branch to push to
 	['update-script', './update.sh'],
+	['disabled', false],
+	['bot-branch', true],
 ]
 def rawReposData = [
 	['busybox', [
@@ -50,7 +52,7 @@ def rawReposData = [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
 	['memcached', [
-		'env': 'MEMCACHED_VERSION',
+		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
 	['mongo', [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
@@ -76,14 +78,8 @@ def rawReposData = [
 	['rabbitmq', [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
-	['redis', [
-		'env': 'REDIS_VERSION',
-	]],
 	['redmine', [
-		'env': 'REDMINE_VERSION',
-		'otherEnvs': [
-			['passenger', 'PASSENGER_VERSION'],
-		],
+		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
 	['ruby', [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
@@ -95,26 +91,17 @@ def rawReposData = [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
 
-	// Elastic images (specialized FROM tags)
-	['elasticsearch', [
-		'env': 'ELASTICSEARCH_VERSION',
-		'from': 'docker.elastic.co/elasticsearch/elasticsearch',
-	]],
-	['logstash', [
-		'env': 'LOGSTASH_VERSION',
-		'from': 'docker.elastic.co/logstash/logstash',
-	]],
-	['kibana', [
-		'env': 'KIBANA_VERSION',
-		'from': 'docker.elastic.co/kibana/kibana',
-	]],
-
 	// versionless
 	['buildpack-deps', [
 		'pipeline-script': 'update.sh/versions-pipeline.groovy',
 	]],
 	['hello-world', [
 		'update-script': 'true',
+	]],
+
+	// TODO it would be great to have one of these jobs per namespace ("mcr.microsoft.com/windows", "redhat", etc.)
+	['external-pins', [
+		'pipeline-script': 'update.sh/external-pins-pipeline.groovy',
 	]],
 
 	// tianon
@@ -131,17 +118,11 @@ def rawReposData = [
 		'env': 'IRSSI_VERSION',
 	]],
 
-	// TimWolla
-	['adminer', [
-		'url': 'git@github.com:TimWolla/docker-adminer.git',
-		'env': 'ADMINER_VERSION',
-		'branch-push': 'docker-library-bot',
-	]],
-
 	// pierreozoux
 	['matomo', [
 		'url': 'git@github.com:matomo-org/docker.git',
 		'env': 'MATOMO_VERSION',
+		'bot-branch': false,
 	]],
 
 	// paultag
@@ -151,12 +132,6 @@ def rawReposData = [
 		'otherEnvs': [
 			['hyrule', 'HYRULE_VERSION'],
 		],
-	]],
-
-	// tilosp
-	['nextcloud', [
-		'url': 'https://github.com/nextcloud/docker.git',
-		'update-script': 'true', // "update.sh" is handled via GitHub Actions
 	]],
 ]
 

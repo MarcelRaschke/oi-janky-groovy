@@ -46,7 +46,7 @@ node {
 		sh '''
 			cd debian-artifacts
 			git config user.name 'Docker Library Bot'
-			git config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git config user.email 'doi+docker-library-bot@docker.com'
 		'''
 	}
 
@@ -90,7 +90,7 @@ node {
 					'''
 				}
 
-				sshagent(['docker-library-bot']) {
+				sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 					stage('Push ' + arch) {
 						sh '''
 							git push -f origin "$ARCH_BRANCH":"$ARCH_BRANCH"

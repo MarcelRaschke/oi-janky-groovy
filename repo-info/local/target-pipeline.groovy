@@ -2,7 +2,7 @@
 
 def repo = env.JOB_BASE_NAME
 
-lock(label: 'repo-info-local', quantity: 1) { node('oracle-worker') { // TODO remove node restriction once worker-{01,02,03} are updated to 20.10.x 🤦
+lock(label: 'repo-info-local', quantity: 1) { node('repo-info-local') {
 	env.BASHBREW_LIBRARY = env.WORKSPACE + '/oi/library'
 
 	stage('Checkout') {
@@ -83,6 +83,8 @@ lock(label: 'repo-info-local', quantity: 1) { node('oracle-worker') { // TODO re
 						{{- $arch := .HasArchitecture arch | ternary arch (.Architectures | first) -}}
 						{{- if not (hasPrefix "windows-" $arch) -}}
 							{{- join " " .Tags -}}
+							{{- " " -}}
+							{{- join " " .SharedTags -}}
 							{{- "\\n" -}}
 						{{- end -}}
 					{{- end -}}
@@ -127,7 +129,7 @@ lock(label: 'repo-info-local', quantity: 1) { node('oracle-worker') { // TODO re
 					for (int i = 1; i < tagGroup.size(); ++i) {
 						def nextTagName = tagGroup[i]
 						def nextTarget = "repos/${repo}/local/${nextTagName}.md"
-						shells << "cp '${firstTarget}' '${nextTarget}'"
+						shells << "[ -s '${nextTarget}' ] || cp -al '${firstTarget}' '${nextTarget}'" // testing first because of SharedTags -- we want the first "shared" tag to win, not the last
 					}
 					sh(shells.join('\n'))
 				}
@@ -137,7 +139,7 @@ lock(label: 'repo-info-local', quantity: 1) { node('oracle-worker') { // TODO re
 		stage('Commit') {
 			sh """
 				git config user.name 'Docker Library Bot'
-				git config user.email 'github+dockerlibrarybot@infosiftr.com'
+				git config user.email 'doi+docker-library-bot@docker.com'
 
 				git add 'repos/${repo}/local' || :
 				git commit -m 'Run scan-local.sh on ${repo}:...' || :
@@ -152,7 +154,7 @@ lock(label: 'repo-info-local', quantity: 1) { node('oracle-worker') { // TODO re
 
 		stage('Push') {
 			if (hasChanges) {
-				sshagent(['docker-library-bot']) {
+				sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 					sh '''
 						# try catching up since this job takes so long to run sometimes
 						git checkout -- .

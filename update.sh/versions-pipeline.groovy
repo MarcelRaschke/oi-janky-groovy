@@ -22,7 +22,6 @@ node {
 	env.BASHBREW_LIBRARY = workspace + '/oi/library'
 	env.BASHBREW_NAMESPACE = 'update.sh'
 	dir(env.BASHBREW_CACHE) { deleteDir() }
-	sh 'mkdir -p "$BASHBREW_CACHE"'
 
 	env.TEST_RUN_SH = workspace + '/oi/test/run.sh'
 
@@ -50,9 +49,6 @@ node {
 			],
 		)
 
-		// https://github.com/docker-library/bashbrew/pull/43
-		env.BASHBREW_BUILDKIT_SYNTAX = sh(script: 'cat oi/.bashbrew-buildkit-syntax', returnStdout: true).trim()
-
 		checkout([
 			$class: 'GitSCM',
 			userRemoteConfigs: [[
@@ -78,13 +74,13 @@ node {
 		])
 		sh '''
 			git -C oi config user.name 'Docker Library Bot'
-			git -C oi config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git -C oi config user.email 'doi+docker-library-bot@docker.com'
 			git -C repo config user.name 'Docker Library Bot'
-			git -C repo config user.email 'github+dockerlibrarybot@infosiftr.com'
+			git -C repo config user.email 'doi+docker-library-bot@docker.com'
 		'''
 
 		if (repoMeta['branch-base'] != repoMeta['branch-push']) {
-			sshagent(['docker-library-bot']) {
+			sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 				sh '''
 					git -C repo pull --rebase origin "$BRANCH_BASE"
 				'''
@@ -100,13 +96,23 @@ node {
 			trap 'rm -rf "$tempDir"' EXIT
 			git clone --depth 1 https://github.com/docker-library/oi-janky-groovy.git "$tempDir"
 			docker build --pull --tag oisupport/update.sh "$tempDir/update.sh"
-
-			# precreate the bashbrew cache (so we can get creative with "$BASHBREW_CACHE/git" later)
-			bashbrew --arch amd64 from --uniq --apply-constraints hello-world:linux > /dev/null
 		'''
 	}
 
-	ansiColor('xterm') { dir('repo') {
+	// https://github.com/docker-library/official-images/pull/14212
+	def buildEnvsJson = sh(returnStdout: true, script: '''#!/usr/bin/env bash
+		set -Eeuo pipefail -x
+
+		oi/.bin/bashbrew-buildkit-env-setup.sh \\
+			| tee /dev/stderr \\
+			| jq 'to_entries | map(.key + "=" + .value)'
+	''').trim()
+	def buildEnvs = []
+	if (buildEnvsJson) {
+		buildEnvs += readJSON(text: buildEnvsJson)
+	}
+
+	ansiColor('xterm') { withEnv(buildEnvs) { dir('repo') {
 		def initialCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
 
 		def versions = sh(
@@ -144,7 +150,7 @@ node {
 							./update.sh "$version"
 
 						componentsAfter="$(version_components)"
-						componentsChanged="$(comm -13 <(echo "$componentsBefore") <(echo "$componentsAfter"))"
+						componentsChanged="$(comm -13 --nocheck-order <(echo "$componentsBefore") <(echo "$componentsAfter"))"
 
 						# Example generated commit messages:
 						#   Update 3.7
@@ -180,7 +186,8 @@ node {
 								docker run --init --rm --user "$user" --mount "type=bind,src=$PWD,dst=$PWD,ro" --workdir "$PWD" oisupport/update.sh \\
 									./generate-stackbrew-library.sh "$version" \\
 									> "$BASHBREW_LIBRARY/$repo"
-								git -C "$BASHBREW_CACHE/git" fetch "$PWD" HEAD:
+								gitCache="$(bashbrew cat --format '{{ gitCache }}' "$repo")"
+								git -C "$gitCache" fetch "$PWD" HEAD:
 
 								bashbrew cat -f '{{ range .Entries }}{{ $.DockerFroms . | join "\\n" }}{{ "\\n" }}{{ end }}' "$repo" \\
 									| sort -u \\
@@ -227,24 +234,29 @@ node {
 				docker run --init --rm --user "$user" --mount "type=bind,src=$PWD,dst=$PWD,ro" --workdir "$PWD" oisupport/update.sh \\
 					./generate-stackbrew-library.sh \\
 					> "$BASHBREW_LIBRARY/$repo"
-				git -C "$BASHBREW_CACHE/git" fetch "$PWD" HEAD:
+				gitCache="$(bashbrew cat --format '{{ gitCache }}' "$repo")"
+				git -C "$gitCache" fetch "$PWD" HEAD:
+				bashbrew fetch --arch-filter "$repo"
 				bashbrew from --uniq "$repo"
 
-				../oi/naughty-from.sh "$repo"
-				../oi/naughty-constraints.sh "$repo"
+				naughty="$(
+					../oi/naughty-from.sh "$repo"
+					../oi/naughty-constraints.sh "$repo"
+				)"
+				[ -z "$naughty" ]
 			'''
 		}
 
 		def newCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
 		stage('Push') { if (newCommit != initialCommit) {
-			sshagent(['docker-library-bot']) {
+			sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 				sh 'git push $([ "$BRANCH_BASE" = "$BRANCH_PUSH" ] || echo --force) origin "HEAD:$BRANCH_PUSH"'
 			}
 		} }
-	} }
+	} } }
 
 	stage('Stage PR') {
-		sshagent(['docker-library-bot']) {
+		sshagent(credentials: ['docker-library-bot'], ignoreMissing: true) {
 			sh '''#!/usr/bin/env bash
 				set -Eeuo pipefail
 				set -x
@@ -289,13 +301,16 @@ node {
 						> "$BASHBREW_LIBRARY/$repo"
 				)
 
-				oi/naughty-from.sh "$repo"
-				oi/naughty-constraints.sh "$repo"
+				naughty="$(
+					oi/naughty-from.sh "$repo"
+					oi/naughty-constraints.sh "$repo"
+				)"
+				[ -z "$naughty" ]
 
 				date="$(git -C repo log -1 --format='format:%aD')"
 				export GIT_AUTHOR_DATE="$date" GIT_COMMITTER_DATE="$date"
 				if [ "$BRANCH_BASE" = "$BRANCH_PUSH" ] && git -C oi add "$BASHBREW_LIBRARY/$repo" && git -C oi commit "${commitArgs[@]}"; then
-					if diff "$BASHBREW_LIBRARY/$repo" <(wget -qO- "$oiForkUrl/raw/$repo/library/$repo") &> /dev/null; then
+					if diff "$BASHBREW_LIBRARY/$repo" <(wget --timeout=5 -qO- "$oiForkUrl/raw/$repo/library/$repo") &> /dev/null; then
 						# if this exact file content is already pushed to a bot branch, don't force push it again
 						exit
 					fi
