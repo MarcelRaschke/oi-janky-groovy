@@ -72,12 +72,6 @@ def rawReposData = [
 		'env': 'IRSSI_VERSION',
 	]],
 
-	// acburdine
-	['ghost', [
-		'url': 'git@github.com:TryGhost/docker-library-ghost.git',
-		'bot-branch': false,
-	]],
-
 	// pierreozoux
 	['matomo', [
 		'pipeline-script': 'update.sh/legacy-pipeline.groovy',
