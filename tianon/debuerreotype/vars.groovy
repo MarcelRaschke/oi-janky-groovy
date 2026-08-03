@@ -1,12 +1,12 @@
 arches = [
 	// see https://www.debian.org/ports/#portlist-released
 	// see also https://lists.debian.org/debian-devel-announce/2016/10/msg00008.html ("Release Architectures for Debian 9 'Stretch'")
+	// additionally https://lists.debian.org/debian-devel-announce/2025/11/msg00001.html ("armel and mips64el removed from unstable and experimental", which means bookworm was the last mips64le and trixie is the last arm32v5)
 	'amd64',
 	'arm32v5',
 	'arm32v7',
 	'arm64v8',
 	'i386',
-	'mips64le',
 	'ppc64le',
 	'riscv64',
 	's390x',
