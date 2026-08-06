@@ -8,7 +8,8 @@ archWorkers = [
 	//'multiarch-i386',
 	'multiarch-ppc64le',
 	'multiarch-riscv64',
-	'multiarch-s390x',
+	'multiarch-s390x-doi1',
+	'multiarch-s390x-doi2',
 
 	//'windows-2022',
 

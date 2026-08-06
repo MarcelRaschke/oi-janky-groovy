@@ -32,6 +32,9 @@ if (params.BASHBREW_ARCH) {
 } else {
 	if (params.TARGET_NODE.startsWith('multiarch-')) {
 		env.BASHBREW_ARCH = params.TARGET_NODE - 'multiarch-'
+		if (env.BASHBREW_ARCH.contains('-')) { // "multiarch-s390x-doi1"
+			env.BASHBREW_ARCH = env.BASHBREW_ARCH.split('-')[0]
+		}
 	} else if (params.TARGET_NODE.startsWith('windows-')) {
 		env.BASHBREW_ARCH = 'windows-amd64' // TODO non-amd64??  match the other naming scheme, probably
 	} else if (params.TARGET_NODE.startsWith('worker-')) {
