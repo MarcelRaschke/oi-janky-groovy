@@ -6,7 +6,6 @@ archWorkers = [
 	//'multiarch-arm32v7',
 	//'multiarch-arm64v8',
 	//'multiarch-i386',
-	'multiarch-mips64le',
 	'multiarch-ppc64le',
 	'multiarch-riscv64',
 	'multiarch-s390x',

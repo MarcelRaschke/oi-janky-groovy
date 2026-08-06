@@ -26,19 +26,6 @@ if (!env.DPKG_ARCH) {
 	error("Unknown 'dpkg' architecture for '${env.ACT_ON_ARCH}'.")
 }
 
-switch (env.DPKG_ARCH) {
-	case [
-		'mips64el',
-	]:
-		// no longer supported on trixie+
-		env.DEBIAN_BUILD_SUITE_OVERRIDE = 'bookworm'
-		break
-
-	default:
-		env.DEBIAN_BUILD_SUITE_OVERRIDE = ''
-		break
-}
-
 env.debuerreotypeVersion = vars.debuerreotypeVersion
 env.debuerreotypeExamplesCommit = vars.debuerreotypeExamplesCommit
 env.TZ = 'UTC'
@@ -69,7 +56,7 @@ node(multiarchVars.node(env.BUILD_ARCH, env.ACT_ON_IMAGE)) {
 					rm -f debuerreotype*.tgz
 					./scripts/debuerreotype-version
 
-					sed -ri "s!^FROM debian${DEBIAN_BUILD_SUITE_OVERRIDE:+:[^-]+}!FROM $TARGET_NAMESPACE/debian${DEBIAN_BUILD_SUITE_OVERRIDE:+:$DEBIAN_BUILD_SUITE_OVERRIDE}!" Dockerfile
+					sed -ri "s!^FROM debian!FROM $TARGET_NAMESPACE/debian!" Dockerfile
 
 					# temporarily resolve chicken and egg (https://lists.debian.org/debian-stable-announce/2019/07/msg00000.html)
 					echo 'RUN apt-get update -qq && apt-get install -yqq debian-archive-keyring && rm -rf /var/lib/apt/lists/*' >> Dockerfile
